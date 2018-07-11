@@ -1,0 +1,159 @@
+<html>
+        <!DOCTYPE html>
+<head>
+    <title>Car Classifieds</title>
+
+    <meta charset="utf-8" />
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/dc@3/dc.css" />
+
+    <script src="https://d3js.org/d3.v4.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crossfilter/1.3.12/crossfilter.min.js"></script>
+    <script src="https://unpkg.com/dc@3/dc.js"></script>
+
+    <style>
+        body {
+            width: 900px;
+            margin: 0 auto;
+            font-family: Helvetica Neue;
+        }
+        h1 + p {
+            margin-top: -25px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Car Classifieds Visualization</h1>
+    <p>Giovanni Paolo <@gpsc>, Visualização de Dados 2018.1</p>
+    <div id="us-chart">
+        <strong>Listings per state.</strong>
+    </div>
+    <div id="year-histogram">
+        <strong>Listings per year.</strong> (x: manufacturing year, y: number of listings)
+    </div>
+    <div id="price-histogram">
+        <strong>Price histogram.</strong> (x: price, y: number of listings)
+    </div>
+    <div id="mileage-chart">
+        <strong>Mileage plot.</strong> (x: avg. mileage per year, y: number of listings, radius: average mileage per car)
+    </div>
+
+    <script>
+    
+    var usChart = dc.geoChoroplethChart("#us-chart");
+    var priceChart = dc.barChart("#price-histogram");
+    var yearChart = dc.barChart("#year-histogram");
+    var mileageChart = dc.bubbleChart("#mileage-chart");
+
+    d3.csv('data/tc20171021.csv', function (csv) {
+        data = crossfilter(csv);
+        states = data.dimension(d => d['State'].toUpperCase().trim());
+        years = data.dimension(d => d['Year']);
+        
+        stateCount = states.group().reduceCount();
+        yearCount = years.group().reduceCount();
+        
+        var prices = data.dimension(d => +d['Price']).filter([500, 50000]);
+        var bins = 200;
+        var extent = d3.extent(csv, d => +d['Price']);
+        var bin_width = (extent[1] - extent[0]) / bins;
+        var group = prices.group(d => Math.floor(d / bin_width) * bin_width);
+
+
+        floatformat = d3.format(".2f")
+        
+        mileage = states.group().reduce(
+            function (p, v) {
+                ++p.count;
+                p.ageSum += (2018 - v['Year']);
+                p.mileageSum += (v['Mileage'] / 1000000);
+                return p;
+            }, 
+            function (p, v) {
+                --p.count;
+                p.ageSum -= (2018 - v['Year']);
+                p.mileageSum -= (v['Mileage'] / 1000000);
+                return p;
+            },
+            function () {
+                return {count: 0, ageSum: 0, mileageSum: 0}
+            }
+        );
+
+        d3.json("data/us-states.json", function (statesJson) {
+            usChart.width(900)
+                .height(500)
+                .dimension(states)
+                .group(stateCount)
+                .colors(d3.scaleQuantize().range(["#E2F2FF", "#C4E4FF", "#9ED2FF", "#81C5FF", "#6BBAFF", "#51AEFF", "#36A2FF", "#1E96FF", "#0089FF", "#0061B5"]))
+                .colorDomain([0, stateCount.top(1)[0].value])
+                .colorCalculator(function (d) { return d ? usChart.colors()(d) : '#ccc'; })
+                .overlayGeoJson(statesJson.features, "state", function (d) {
+                    return d.properties.name;
+                })
+                .projection(d3.geoAlbersUsa())
+                .valueAccessor(function (kv) {
+                    // console.log(kv);
+                    return kv.value;
+                })
+                .title(function (d) {
+                    return "State: " + d.key + "\nTotal listings: " + d.value;
+                });
+            
+            yearChart.width(900)
+                .height(250)
+                .margins({ top: 10, right: 50, bottom: 30, left: 60 })
+                .dimension(years)
+                .group(yearCount)
+                .gap(1)
+                .x(d3.scaleLinear().domain([1995, 2018]))
+                .elasticY(true)
+                .centerBar(false)
+                .renderHorizontalGridLines(true)
+                .title(d => "Year: " + d.key + "\nListings: " + d.value)
+                .xAxis().tickFormat(d3.format("d"));
+            
+            priceChart.width(900)
+                .height(250)
+                .margins({ top: 10, right: 50, bottom: 30, left: 60 })
+                .dimension(prices)
+                .group(group)
+                .gap(1)
+                .round(Math.floor)
+                .xUnits(dc.units.fp.precision(bin_width))
+                .x(d3.scaleLinear().domain([0, 80000]).range([0, bins]))
+                .elasticY(true)
+                .centerBar(true)
+                .renderHorizontalGridLines(true)
+                .title(d => "Price: " + d.key + "\nListings: " + d.value)
+                .xAxis().ticks(25).tickFormat(d3.format("d"));
+            
+            mileageChart.width(900)
+                .height(250)
+                .margins({ top: 10, right: 50, bottom: 30, left: 60 })
+                .dimension(states)
+                .group(mileage)
+                .keyAccessor(p => (p.value.mileageSum * 1000000 / p.value.ageSum))
+                .valueAccessor(p => p.value.count)
+                .radiusValueAccessor(p => p.value.mileageSum * 50000 / p.value.count)
+                .x(d3.scaleLinear().domain([0, 1]))
+                .r(d3.scaleLinear().domain([0, 5000]))
+                .minRadiusWithLabel(15)
+                .elasticY(true)
+                .yAxisPadding(25000)
+                .xAxisPadding(200)
+                .elasticX(true)
+                .maxBubbleRelativeSize(0.07)
+                .renderHorizontalGridLines(true)
+                .renderVerticalGridLines(true)
+                .renderLabel(true)
+                .title(p => p.key + "\nAvg. Mileage: " + floatformat(p.value.mileageSum * 1000000 / p.value.count) +
+                "\nAvg. Mileage / Year: " + floatformat(p.value.mileageSum * 1000000 / p.value.ageSum))
+
+            dc.renderAll();
+        });
+    });
+    </script>
+</body>
+</html>
+
+
